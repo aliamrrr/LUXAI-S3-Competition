@@ -1,4 +1,4 @@
-# AI Bots for LuxAI Season 3 Competition 🤖⚽
+# AI Bots for LuxAI Season 3 Competition 🤖
 
 Welcome to the repository for the AI bots developed for the LuxAI Season 3 competition! The goal of this competition is to create and train AI bots to play a novel multi-agent 1v1 game against other agents. This repository includes the various reinforcement learning techniques used to train our models and an evaluation framework for assessing their performance.
 
