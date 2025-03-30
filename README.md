@@ -8,7 +8,8 @@ In this competition, we developed multiple techniques to train our bots, includi
 
 - **Adaptative DQN**: A variant of Deep Q-Network (DQN) that trains directly against an opponent, adapting its strategy during training based on the adversary's behavior. 💡
 - **Pretrained DQN**: A DQN model that has been pre-trained on initial data to accelerate learning. 🚀
-- **Dueling DQN with PRP (Pretrained Reward Prediction)**: A combination of Dueling DQN with Pretrained Reward Prediction, which helps the agent better handle uncertain environments by using a value and advantage function to separate out state-action values. 🏆
+- **Dueling DQN with PRP (Prioritized replay buffer)**: A combination of Dueling DQN with a pioritized replay buffer, which accelerate and improve the agent training by using a value and advantage networks to separate out state-action values, and also encourages the model to replay important experiences in training to better tune the its parameters. 🏆
+
 - **QMix Learning**: A multi-agent reinforcement learning approach for cooperative environments. 🤝
 
 An evaluation framework (`LUXAI_EVALUATION.ipynb`) is provided to benchmark these models and compare their performance. 📊
@@ -21,8 +22,8 @@ The **Adaptative DQN** algorithm is a variant of DQN that directly trains agains
 ### 2. **Pretrained DQN** 🚀
 The **Pretrained DQN** model leverages pre-trained weights to jumpstart the training process.
 
-### 3. **Dueling DQN with PRP (Pretrained Reward Prediction)** 🎯
-The **Dueling DQN with PRP** model USES Dueling DQN .
+### 3. **Dueling DQN with PRP (Prioritized replay buffer)** 🎯
+The **Dueling DQN with PRP** model uses Dueling DQN along with a trick to improve training by prioritizing important experiences in learning.
 
 ### 4. **QMix Learning** 🧠
 The **QMix Learning** algorithm is used in multi-agent environments where agents must collaborate. It is designed for cooperative gameplay, allowing agents to work together while learning independently.

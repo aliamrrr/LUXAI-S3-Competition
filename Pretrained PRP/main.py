@@ -1,3 +1,6 @@
+
+# This code was provided by the challenge and it shouldn't be modified 
+
 import json
 from typing import Dict
 import sys
