@@ -1,4 +1,3 @@
-import sys
 import numpy as np
 import torch
 import torch.nn as nn
@@ -7,7 +6,6 @@ import torch.optim as optim
 from collections import deque
 import random
 from tqdm import tqdm
-import os
 from luxai_s3.wrappers import LuxAIS3GymEnv
 
 # Dueling DQN with Layer Normalization
