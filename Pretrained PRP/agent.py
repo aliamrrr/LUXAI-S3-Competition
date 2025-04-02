@@ -10,19 +10,36 @@ from luxai_s3.wrappers import LuxAIS3GymEnv
 
 # Dueling DQN with Layer Normalization
 class DuelingDQN(nn.Module):
+    """ The idea behind dueling deep q networks is instead of learning the Q value directly we seperate it into two different components 
+
+        V(s) : the value of the state s ( how good is a state )
+        A(s,a) : the advantage of taking an action a in the same state s 
+
+        This trick is beneficial for training the neural network. For example, imagine our agent navigating in space :
+        - The value function V(s) allows the network to check whether a particular area of the map is good or not (open, safe, or having rewards), independently of the actions.
+        - The advantage function A(s,a) manages the relative benefits of the possible actions in that zone, such as going left, right, or forward.
+        
+        By decoupling the estimation of state value from the differences between actions, the network can learn more efficiently. Instead, of relearning
+        both the value of a state and the advantage of taking actions each time in the case of traditional deep q network, the DDQN is better at generalization
+        by learning a baseline V(s) for all actions and then computing the nuances of taking these actions. 
+    
+    """
+
     def __init__(self, input_size, hidden_size, output_size):
         super(DuelingDQN, self).__init__()
+
+        # We start by a linear layer to extract features from our input and then normalize it for stability
         self.feature = nn.Linear(input_size, hidden_size)
         self.ln1 = nn.LayerNorm(hidden_size)
 
-        # The advantage network
+        # The advantage network is applyed to figure out the advantage of taking each action in a state s
         self.advantage = nn.Sequential(
             nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
             nn.Linear(hidden_size // 2, output_size)
         )
 
-        # The state value network
+        # The state value network is applyed to seperately judge the value of being in this state ( Is this a good state to be at ? That last state i was at seems better )
         self.value = nn.Sequential(
             nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
@@ -30,13 +47,42 @@ class DuelingDQN(nn.Module):
         )
 
     def forward(self, x):
+        # Extract the features from the input 
         x = F.relu(self.ln1(self.feature(x)))
+        # Compute the advantage of taking each action in the state 
         adv = self.advantage(x)
+        # Compute the value of being at the state in the first place
         val = self.value(x)
+        # Combine both measurements. We remove the mean of the advantages to solve the problem of "identifiability". Basically,
+        # we guide the network to learn unique values of the advantages and the values. If we didn't remove the mean, the equation would
+        # have multiple solutions and we will confuse the network during training.
         return val + adv - adv.mean()
 
+# We use a Prioritised replay buffer to further improve our learning 
 class PrioritizedReplayBuffer:
+    """
+    To train our agent, we need to use a buffer where we store past experiences and use them to train our agent in batches.  
+    As the agent progresses in the map, we collect these experiences in the buffer and then sample a batch from them for training.  
+
+    The main idea behind the prioritized replay buffer is to sample "important" experiences primarily instead of less significant ones.  
+    Important experiences are those where the model made significant errors in estimating the Q-values, as these are the ones that  
+    provide the most learning signal.  
+
+    To do this, we assign each experience a sampling probability based on the model’s error (also called TD error).  
+    The higher the error, the more likely we are to sample that experience. These probabilities are updated  
+    after learning with the new data.  
+
+    However, since our sampling distribution is no longer uniform, we need a way to balance it.  
+    To make sure we still take into account other experiences, we use "importance sampling weights" to correct this bias during training.  
+    The idea is that when we sample data and use it in backpropagation, we apply these weights to reduce the effect of frequently sampled  
+    experiences and increase the effect of less important ones.  
+
+    This technique helps mitigate the biased sampling so that, although we prioritize certain experiences,  
+    we do not ignore other meaningful replays, preventing overfitting and ensuring more stable learning.
+    """
+
     def __init__(self, capacity, alpha=0.6):
+        """Initialize two buffers to stock the experiences and their priorities"""
         self.capacity = capacity
         self.buffer = deque(maxlen=capacity)
         self.priorities = deque(maxlen=capacity)
@@ -44,12 +90,16 @@ class PrioritizedReplayBuffer:
         self.epsilon = 1e-5  # We use epsilon to avoid experiences with zero priority ( all experiences have a chance to be sampled)
 
     def push(self, state, action, reward, next_state, done):
+        """Push the experiences in the buffer and assign them default priorities of 1"""
         max_priority = max(self.priorities, default=1.0)
         self.buffer.append((state, action, reward, next_state, done))
         self.priorities.append(max_priority)
 
 
     def sample(self, batch_size, beta=0.4):
+        """Sample experiences based on probabilities computed from the priorities, 
+           along with their indices and importance sampling weights
+        """
         scaled_priorities = np.array(self.priorities) ** self.alpha
         probs = scaled_priorities / scaled_priorities.sum()
         indices = np.random.choice(len(self.buffer), batch_size, p=probs)
@@ -59,14 +109,26 @@ class PrioritizedReplayBuffer:
         return samples,indices, torch.FloatTensor(weights).to("cpu")
 
     def update_priorities(self, indices, errors):
+        """Update the priorities with the new found estimation errors"""
         for i, err in zip(indices, errors.detach().cpu().numpy()):
             self.priorities[i] = abs(err) + self.epsilon
 
     def __len__(self):
+        """Return the length of the experiences buffer"""
         return len(self.buffer)
 
+# Now we define our agent that is going to use the above techniques
 class Agent:
     def __init__(self, player, env_cfg, training=False):
+        """Initialize the agent, particularly with these main parameters : 
+         
+         - policy network : The main network that defines the policy of the agent and dictate its movements. 
+         - target network : A reference network used to train the network by providing fixed values for the q values. It 
+                            is essentially a copy of the policy network but updated less frequently. We use it to have stable targets
+                            during training and avoid changing these tragets when we update the model.
+         - memory         : The prioritized replay buffer used to store and sample experiences.
+         
+         """
         self.player = player
         self.opp_team_id = 1 if player == "player_0" else 0
         self.team_id = 0 if player == "player_0" else 1
@@ -98,6 +160,7 @@ class Agent:
             self.load_model()
 
     def _state_representation(self, unit_pos, unit_energy, relic_nodes, step, relic_mask, obs):
+        """A tensor that we use to represent the state of the game, we feed it to the network to generate actions"""
         # Closest relic
         if not relic_mask.any():
             closest_relic = np.array([-1, -1])
@@ -127,6 +190,15 @@ class Agent:
         return torch.FloatTensor(state).to(self.device)
 
     def act(self, step: int, obs, remainingOverageTime: int = 60):
+        """The function that we call to get the action of the agent. It creates a state representation based on the passed observations 
+           parameter.
+
+            It uses an epsilon greedy approach to take actions which works as follows : 
+            It draw a random number between 0 and 1, if it is less than epsilon, it returns a random action. If it is higher
+            it uses the policy network to determine the action and returns it. 
+
+        
+        """
         unit_mask = np.array(obs["units_mask"][self.team_id])
         unit_positions = np.array(obs["units"]["position"][self.team_id])
         unit_energys = np.array(obs["units"]["energy"][self.team_id])
@@ -153,6 +225,10 @@ class Agent:
         return actions
 
     def learn(self):
+        """This is the function that we call to make the model learn from a sampled batch from the saved experiences 
+            It uses a prioritized replay buffer for back propagation, favoring therfore important experiences and using the 
+            importance sampling weights to reduce the sampling bias as discussed earlier.
+        """
         if len(self.memory) < self.batch_size:
             return None
 
@@ -185,9 +261,11 @@ class Agent:
         return loss.item()
 
     def save_model(self):
+        """A function we use to save our model to be used afterwards in matches"""
         torch.save(self.policy_net.state_dict(), f'dqn_{self.player}.pth')
 
     def load_model(self):
+        """A function we use to load our saved policy model"""
         try:
             self.policy_net.load_state_dict(torch.load(f'dqn_{self.player}.pth'))
             self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -195,14 +273,21 @@ class Agent:
             print("No saved model found.")
 
 def evaluate_agents(agent_1_cls, agent_2_cls, seed=42, training=True, games_to_play=3):
+    """
+    The evaluate function is used to play matches between two opposing agents. It can either be used in a training context to 
+    train the models or to simply visualize the performance of both models. 
+    
+    It defines also the reward function used to train the models, below is a complete description of how we made it. 
+    """
     env = LuxAIS3GymEnv(numpy_output=True)
     obs, info = env.reset(seed=seed)
     env_cfg = info["params"]
 
-    # We share the replay buffer so that opposant agent can both benefit from all experiences
+    player_0 = agent_1_cls("player_0", env_cfg, training=training)
+    player_1 = agent_2_cls("player_1", env_cfg, training=training)
+    # Instead of having different buffers for different agents, we share it so that opposant agents 
+    # can both benefit from all experiences. The shared memory is of course used only in training
     shared_memory = PrioritizedReplayBuffer(20000)
-    player_0 = Agent("player_0", env_cfg, training=training)
-    player_1 = Agent("player_1", env_cfg, training=training)
     player_0.memory = shared_memory
     player_1.memory = shared_memory
     player_0.team_id = 0
@@ -233,7 +318,7 @@ def evaluate_agents(agent_1_cls, agent_2_cls, seed=42, training=True, games_to_p
 
             actions["player_0"] = player_0.act(step=step, obs=obs["player_0"])
             actions["player_1"] = player_1.act(step=step, obs=obs["player_1"])
-            # Initialize the dictionary with NumPy arrays
+
             prev_action = {
                 "player_0": np.full(env_cfg["max_units"], -1),
                 "player_1": np.full(env_cfg["max_units"], -1)
@@ -292,7 +377,7 @@ def evaluate_agents(agent_1_cls, agent_2_cls, seed=42, training=True, games_to_p
                             else:
                                 cluster_count = 0
 
-                            # Verify thresholds and pply rewards :
+                            # Verify thresholds and apply rewards :
                             if cluster_count >= 5 and cluster_count <= 7  : 
                                 cluster_reward = 0.5
                             else:
